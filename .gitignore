@@ -1,0 +1,8 @@
+lammps/build*/
+benchmarks/
+equilibrium/
+*.log
+*.o
+*.a
+lammps/src/lmp_mpi
+lammps/src/lmp_serial
