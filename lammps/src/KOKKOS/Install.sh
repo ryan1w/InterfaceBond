@@ -173,6 +173,8 @@ action fix_minimize_kokkos.cpp
 action fix_minimize_kokkos.h
 action fix_momentum_kokkos.cpp
 action fix_momentum_kokkos.h
+action fix_move_kokkos.cpp fix_move.cpp
+action fix_move_kokkos.h fix_move.h
 action fix_neigh_history_kokkos.cpp
 action fix_neigh_history_kokkos.h
 action fix_nh_kokkos.cpp
