@@ -1,0 +1,272 @@
+clear
+# Kokkos comparison input. Keep in.make_interface_bonds unchanged for the
+# baseline run; run this file with the separate kk-variant executable/script.
+units real
+dimension 3
+boundary s p f
+atom_style molecular/kk
+
+# =========================================================
+# Read already-relaxed shear-ready structure
+# Add extra capacity for new interface bonds
+# =========================================================
+read_data sine068_1shear.dat extra/bond/types 1 extra/bond/per/atom 3 extra/special/per/atom 12
+
+set atom * image 0 0 0
+
+# Keep atoms inside x direction
+#fix wallx all wall/reflect xlo EDGE xhi EDGE
+fix wallz all wall/reflect/kk zlo EDGE zhi EDGE
+# =========================================================
+# Force fields
+# =========================================================
+pair_style hybrid/overlay/kk morse/kk 12.0 tersoff/kk lj/cut/kk 12.0
+bond_style hybrid/kk class2/kk harmonic/kk
+angle_style quartic/kk
+
+# =========================================================
+# Masses
+# =========================================================
+mass 1 60.01
+mass 2 77.10
+mass 3 28.05
+mass 4 12.01
+
+# =========================================================
+# Pair coefficients
+# =========================================================
+pair_coeff 1 1 morse/kk 0.527 1.157 4.984
+pair_coeff 1 2 morse/kk 1.198 0.755 5.520
+pair_coeff 1 3 morse/kk 1.807 0.764 5.547
+pair_coeff 2 2 morse/kk 0.591 0.812 5.838
+pair_coeff 2 3 morse/kk 0.013 1.452 6.465
+pair_coeff 3 3 morse/kk 0.790 1.060 5.788
+
+pair_coeff * * tersoff/kk lammps/potentials/SiC.tersoff NULL NULL NULL C
+
+#pair_coeff 1 4 lj/cut 0.205 4.147
+#pair_coeff 2 4 lj/cut 0.217 4.488
+#pair_coeff 3 4 lj/cut 0.251 4.489
+pair_coeff 1 4 lj/cut/kk 0.10 4.147
+pair_coeff 2 4 lj/cut/kk 0.10 4.488
+pair_coeff 3 4 lj/cut/kk 0.10 4.489
+
+# =========================================================
+# Bond coefficients
+# bond type 1,2 = original PC backbone
+# bond type 3   = new PC-carbon interface bond
+# =========================================================
+bond_coeff 1 class2/kk 3.7 10.0 0.0 1200
+bond_coeff 2 class2/kk 3.4 80.0 300 2000
+
+# Trial interface bond: harmonic K r0
+bond_coeff 3 harmonic/kk 6.0 4.5
+
+# =========================================================
+# Angle coefficients
+# =========================================================
+angle_coeff 1 180.0 -2.0 0.0 20.0
+angle_coeff 2 76.0 55.0 -1.0 1.0
+angle_coeff 3 180.0 0.0 1.5 1.0
+
+# =========================================================
+# Neighbor settings
+# =========================================================
+neighbor 2.0 bin
+neigh_modify delay 0 every 1 check yes one 10000 page 500000 binsize 3.0
+
+# =========================================================
+# Groups
+# =========================================================
+group pc type 1 2 3
+group carbon type 4
+
+# top carbon
+variable topC atom "(type == 4) && z > 0"
+group roughC variable topC
+
+# bottom carbon
+variable botC atom "(type == 4) && z < 0"
+group bot variable botC
+
+# bottom anchored PC region
+region botinter block/kk INF INF INF INF INF -62 units box
+group botinter region botinter
+
+group pc_bottom intersect pc botinter
+group pc_mobile subtract pc pc_bottom
+
+group mobile1 subtract pc botinter
+
+compute ftop roughC reduce sum fx fy fz
+variable Fx equal c_ftop[1]
+variable Fy equal c_ftop[2]
+variable Fz equal c_ftop[3]
+
+compute fbot bot reduce sum fx fy fz
+variable Fxbot equal c_fbot[1]
+variable Fybot equal c_fbot[2]
+variable Fzbot equal c_fbot[3]
+
+compute fpc pc_mobile reduce sum fx fy fz
+variable Fxpc equal c_fpc[1]
+variable Fypc equal c_fpc[2]
+variable Fzpc equal c_fpc[3]
+
+compute fpcb pc_bottom reduce sum fx fy fz
+variable Fxpcb equal c_fpcb[1]
+variable Fypcb equal c_fpcb[2]
+variable Fzpcb equal c_fpcb[3]
+
+compute Fint roughC group/group pc pair yes kspace no boundary yes
+variable Fy_int equal c_Fint[1]
+
+
+
+
+# =========================================================
+# IMPORTANT:
+# Define thin PC layer near top interface
+# These z values MUST be adjusted for your structure
+# Start with a narrow slab near the top interface
+# =========================================================
+region top_pc_if_reg block/kk INF INF INF INF 68 95 units box
+group top_pc_if region top_pc_if_reg
+group top_pc_if intersect top_pc_if pc
+
+# Union group for bond creation
+group top_if_union union top_pc_if roughC
+
+# =========================================================
+# Thermostat / constraints
+# =========================================================
+timestep 1.0
+run_style verlet/kk
+
+#fix nvt_pc pc_mobile nvt temp 300.0 300.0 100.0
+
+velocity bot set 0.0 0.0 0.0
+fix freezeC bot setforce/kk 0 0 0
+
+#fix anchor pc_bottom spring/self 5.0
+#fix prevent_drift pc momentum 100 linear 1 1 1
+
+# Hold top carbon fixed during bond creation
+velocity roughC set 0.0 0.0 0.0
+fix holdTop roughC setforce/kk 0 0 0
+
+# =========================================================
+# Output
+# =========================================================
+thermo_style custom step temp ke pe etotal press pyy pzz pyz vol lx ly lz density
+thermo 3000
+log sine068_1_kk.pull
+
+# Very short settling only
+run 2000
+
+# =========================================================
+# Create interface bonds
+# Only PC type 3 <-> carbon type 4
+# cutoff = 5.0 A
+# bond type = 3
+# probability = 0.10
+# max one created interface bond per atom
+# =========================================================
+fix makeTop1 top_if_union bond/create 100 1 4 4.4 3 iparam 1 1 jparam 1 4 prob 0.10 11111
+fix makeTop2 top_if_union bond/create 100 2 4 4.4 3 iparam 1 2 jparam 1 4 prob 0.10 22222
+fix makeTop3 top_if_union bond/create 100 3 4 4.4 3 iparam 1 3 jparam 1 4 prob 0.10 33333
+
+run 7000
+
+unfix makeTop1
+unfix makeTop2
+unfix makeTop3
+write_data before_shearx_kk.data
+# ---------------------------------------------------------
+# Relax newly created interface bonds before writing data
+# ---------------------------------------------------------
+
+unfix holdTop
+reset_timestep 0
+timestep 1
+
+fix nvt_pc pc_mobile nvt/kk temp 300.0 300.0 100.0
+#fix nve_top roughC nve
+
+velocity botinter set 0.0 0.0 0.0
+fix freezeC botinter setforce/kk 0 0 0
+#fix refy pc_bottom store/state 0 y
+#fix anchor pc_bottom spring/self 5.0 y
+
+#variable dy atom y-f_refy[1]
+#compute sumdy pc_bottom reduce sum v_dy
+#variable Fpull equal -5.0*c_sumdy
+
+fix breakIF top_if_union bond/break 10 3 5.3 prob 1.0 24680
+
+
+
+
+compute pc_temp pc temp/kk
+
+
+
+# velocity roughC set 0.0001 0.0 0.0 units box
+# fix f_top roughC setforce/kk 0.0 0.0 0.0
+# fix nve_top roughC nve/kk
+fix movetop roughC move linear 0.0001 0.0 0.0 units box
+
+compute bprop  all property/local batom1 batom2 btype
+compute bforce all bond/local fx
+
+dump dbond all local 10000 bond3x_local_kk.dump c_bprop[1] c_bprop[2] c_bprop[3] c_bforce
+#dump_modify dbond sort id
+#fix pull roughC smd cvel 5.0 0.0001 couple bot 0.0 1.0 0.0 0.0
+#variable iFy equal f_pull[2]
+variable i loop 1
+label loop_start
+
+if "${i} > 1" then "undump d1"
+variable seg equal ${i}
+variable dumpfile string shear_bonded_kk_${seg}.dump
+
+dump d1 all custom 10000 ${dumpfile} id mol type x y z vx vy vz
+
+restart 1000000 restart_kk.*.bin
+# Log and thermo settings
+
+thermo_style custom step temp c_pc_temp ke etotal press pyz pzz pyy lx ly lz density v_Fy_int v_Fx v_Fypc v_Fybot v_Fypcb
+thermo 10000
+
+
+#variable j loop 200
+#label inner_loop
+
+#run 5000
+#write_data shear_data_seg${i}_frame${j}.data nocoeff
+
+#next j
+#jump SELF inner_loop
+
+#variable j delete
+run 10000
+next i
+jump SELF loop_start
+# Output final deformed structure
+write_dump all custom final_shear_smooth_kk.lammpstrj id mol type x y z modify sort id
+
+
+
+unfix breakIF
+unfix nvt_pc
+# These fixes are commented out above, so do not unfix them here.
+#unfix anchor
+#unfix prevent_drift
+
+
+
+# =========================================================
+# Save bonded structure
+# =========================================================
+write_data sigmatex22shear_bonded_kk.data
